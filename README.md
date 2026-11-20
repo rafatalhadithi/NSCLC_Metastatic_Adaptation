@@ -1,115 +1,71 @@
 # NSCLC Metastatic Adaptation: Multi-Modal Transcriptomic Pipeline
 
-This repository contains the complete, reproducible computational pipeline used to investigate the transcriptomic mechanisms of metastatic lineage plasticity and subsequent Osimertinib tolerance in Non-Small Cell Lung Cancer (NSCLC). 
+This repository contains the reproducible computational pipeline for ***"Machine Learning and Spatial Transcriptomics Identify a MUC1/SCGB3A2 Lineage Plasticity Signature Associated with Metastatic Adaptation in NSCLC."***
 
 ## Overview
-By integrating single-cell RNA sequencing (scRNA-seq), spatial transcriptomics, and machine learning, this framework maps evolutionary adaptation across diverse structural states. A Nested Patient-Level Cross-Validated Random Forest primary-versus-metastatic lineage classifier (GroupKFold) highlights **SCGB3A2** and **MUC1** as top discriminators of the metastatic state. The pipeline utilizes `decoupler` for rigorous pseudo-bulked GSEA, and `squidpy` permutation testing to identify the dynamic acquisition of the **LGALS9-HAVCR2 (TIM-3)** immune exhaustion axis during Progressive Disease. Finally, targets are validated across TCGA clinical cohorts, revealing that tumors actively hijack highly differentiated, indolent baseline epithelial states to survive acute targeted therapy.
+By integrating single-cell RNA sequencing (scRNA-seq), 10x Visium spatial transcriptomics, and donor-aware machine learning, this hypothesis-generating framework characterizes epithelial lineage plasticity across primary and metastatic lung adenocarcinoma (LUAD). A Nested Patient-Level 5-Fold `GroupKFold` Random Forest primary-versus-metastatic classifier highlights **SCGB3A2**, **HP**, **MUC1**, and **SFTPB** among top discriminators, generalizing across sequencing platforms (10x Genomics to Smart-seq2) in 41 held-out biopsies from `PRJNA591860`. Biopsy-level pseudo-bulk GSEA, biopsy-level predicted extracellular ligand–receptor co-expression, Visium physical spatial block analyses, and multivariable survival modeling in resected neoadjuvant-naïve *EGFR*-mutant TCGA-LUAD are implemented end-to-end.
 
 ---
 
 ## Data Availability
-Due to GitHub file size limits, raw `.fastq`, `.mtx`, and massive `.h5ad` single-cell matrices are not included in this repository. 
+Due to GitHub file size limits, raw sequencing archives and large `.h5ad` single-cell objects are hosted externally.
 
-**For Peer Reviewers (Pre-Processed Data):**
-To facilitate immediate reproducibility without requiring extensive computational preprocessing, the fully processed and annotated single-cell AnnData objects used in this study are securely hosted on Zenodo.
-1. Download `GSE131907_FINAL_ANNOTATED.h5ad` (Discovery) and `maynard_annotated.h5ad` (Validation) from Zenodo: **[https://zenodo.org/records/23512899?token=eyJhbGciOiJIUzUxMiJ9.eyJpZCI6IjExYzFlMTBmLTdmYmQtNGVhNS1iYmNmLTIzODkzYTBhNzJiMCIsImRhdGEiOnt9LCJyYW5kb20iOiIyYjFlZGVmMzhmM2U0NTc3Zjc2MjcwZmFiNmZhMjNmYiJ9.swjgBGwqWAyDnL36unSsdy-QABep7NpuI5vfd9EXKQFYFfd85yO8PhYS5ApYlXvnYG4aS6M1-jUZCCu5Soljhw]**
-2. Place the downloaded `.h5ad` files into the `data/` directory of this cloned repository before running the scripts.
+**Pre-Processed Single-Cell Objects (Zenodo):**
+1. Download `GSE131907_FINAL_ANNOTATED.h5ad` (Discovery) and `maynard_annotated.h5ad` (External Validation) from Zenodo:  
+   **https://zenodo.org/records/23512899?token=eyJhbGciOiJIUzUxMiJ9.eyJpZCI6IjExYzFlMTBmLTdmYmQtNGVhNS1iYmNmLTIzODkzYTBhNzJiMCIsImRhdGEiOnt9LCJyYW5kb20iOiIyYjFlZGVmMzhmM2U0NTc3Zjc2MjcwZmFiNmZhMjNmYiJ9.swjgBGwqWAyDnL36unSsdy-QABep7NpuI5vfd9EXKQFYFfd85yO8PhYS5ApYlXvnYG4aS6M1-jUZCCu5Soljhw**
+2. Place both `.h5ad` files into the `data/` directory of this repository before running the pipeline.
 
-**Raw Data Sources:**
-Raw matrices can be accessed via the Gene Expression Omnibus (GEO) and Sequence Read Archive (SRA):
-* **Discovery Cohort:** GSE131907
-* **Longitudinal Validation Cohort:** PRJNA591860 (Maynard et al., 2020)
-* **Spatial Transcriptomics Validation:** GSE267960
-* **TCGA-LUAD:** Pan-Cancer Atlas 2018
+**Public Accessions:**
+* **Discovery scRNA-seq Atlas:** `GSE131907` (Kim et al., 2020)
+* **External Multi-Biopsy scRNA-seq Cohort:** `PRJNA591860` (Maynard et al., 2020)
+* **10x Visium Spatial LUAD Dataset:** `GSE267960` / `GSM8282531` (Hong et al., 2025; place SpaceRanger output under `data/validation_cohorts/GSE267960/GSM8282531_S20-12254-L9/S20-12254-L9/`)
+* **TCGA-LUAD Clinical & RSEM Cohort:** Pan-Cancer Atlas 2018 via cBioPortal (place under `data/tcga_luad/luad_tcga_pan_can_atlas_2018/`)
 
 ---
 
-## File Name Mapping Guide
-All generated data tables have been standardized to map directly to the manuscript's Supplementary Data.
+## Supplementary Data File Mapping
 
 | Manuscript File Name | Description |
 | :--- | :--- |
-| `Supplementary_Data_1.csv` | Pseudo-bulked differential gene expression (DGE) results. |
-| `Supplementary_Data_2.csv` | MSigDB Hallmark GSEA enrichment results (Discovery Cohort). |
-| `Supplementary_Data_3.csv` | PAGA evolutionary trajectory and connectivity matrix. |
-| `Supplementary_Data_4.csv` | GroupKFold CV performance metrics (Accuracy, F1, Precision, Recall). |
-| `Supplementary_Data_5.csv` | Top lineage discriminator genes (SCGB3A2/MUC1) and RF importance weights. |
-| `Supplementary_Data_6.csv` | Spot-level Spearman correlations between epigenetic regulators (EZH2-HOXC). |
-| `Supplementary_Data_7.csv` | Evaluation of spatial masking via Simpson's Paradox (Simulated Bulk). |
-| `Supplementary_Data_8.csv` | Maynard single-cell validation data (Expression metrics for Violin Plots). |
-| `Supplementary_Data_9.csv` | Cross-cohort GSEA validation summary (Maynard PD vs TN). |
-| `Supplementary_Data_10.csv` | Maynard patient-level metadata manifest and retained cell counts. |
-| `Supplementary_Data_11.csv` | TCGA Clinical Survival Statistics (Hazard Ratios & Confidence Intervals). |
+| `Supplementary_Data_1.csv` | Biopsy-level pseudo-bulk differential gene expression (`GSE131907`, Metastatic vs. Primary, Wilcoxon with BH adjustment). |
+| `Supplementary_Data_2.csv` | Preranked MSigDB Hallmark GSEA summary for the Discovery cohort (`GSE131907`, Metastatic vs. Primary biopsies). |
+| `Supplementary_Data_3.csv` | Unsupervised PAGA connectivity matrix across non-brain anatomical sites (`tLung`, `tL/B`, `mLN`, `PE`). |
+| `Supplementary_Data_3B_Sensitivity.csv` | DPT and PAGA hyperparameter sensitivity grid (`n_neighbors` = 10, 15, 30; `n_pcs` = 20, 30, 40). |
+| `Supplementary_Data_3C_Node_Sample_Counts.csv` | Epithelial cell counts and unique patient biopsy counts per anatomical node in `GSE131907`. |
+| `Supplementary_Data_4.csv` | Nested Patient-Level 5-Fold `GroupKFold` Random Forest cross-validation metrics. |
+| `Supplementary_Data_4B_LR_Biopsy_Stats.csv` | Biopsy-level predicted extracellular ligand–receptor co-expression SMDs, simultaneous 95% bootstrap CIs, and BH-FDR *q*-values. |
+| `Supplementary_Data_5.csv` | Consensus Random Forest primary-versus-metastatic feature importance weights. |
+| `Supplementary_Data_6.csv` | Exploratory Visium spot-level Spearman correlations with summed *HOXC* locus expression (`GSM8282531`). |
+| `Supplementary_Data_7.csv` | Single-spot Visium correlation (with 2D physical block-bootstrap 95% CI) vs. 12×12 Spatial Grid Block Aggregation. |
+| `Supplementary_Data_8.csv` | Held-out 41-biopsy external validation matrix (`PRJNA591860`: 14 Primary vs. 27 Metastatic biopsies) and ROC predictions. |
+| `Supplementary_Data_9.csv` | Preranked MSigDB Hallmark GSEA summary for the External cohort (`PRJNA591860`, Metastatic vs. Primary biopsies). |
+| `Supplementary_Data_10.csv` | Complete 49-biopsy / 33-patient clinical, genomic, anatomical, therapy, and cell-count manifest (`PRJNA591860`). |
+| `Supplementary_Data_11.csv` | TCGA-LUAD univariable/multivariable Cox regressions (continuous & median-split) and Schoenfeld PH diagnostics. |
+| `Supplementary_Data_12.csv` | Auditable patient-level neoadjuvant-naïve primary *EGFR*-mutant TCGA-LUAD dataset (*n* = 80). |
 
 ---
 
-## Pipeline Execution Details
-All scripts utilize dynamic relative paths for cross-platform compatibility. Execute the scripts from within the `notebooks/` directory in the sequential order provided below:
+## Sequential Pipeline Execution (`notebooks/`)
 
-### `01_preprocess_GSE131907.py`
-**Preprocessing & Quality Control:** Ingests raw matrices, applies strict biological filtering, normalizes data, and calculates high-dimensional embeddings (PCA/UMAP/Leiden). Annotates populations as Primary or Metastatic.
-* **Inputs:** `GSE131907_RAW_merged.h5ad`
-* **Outputs:** `GSE131907_FINAL_ANNOTATED.h5ad` [Zenodo], Figure 1, Supp Fig S1, Supp Fig S2
-
-### `02_preprocess_Maynard.py`
-**Validation Cohort Preparation:** Standardizes the external PRJNA591860 longitudinal dataset. Extracts clinical TN, RD, and PD stages, deduplicates metadata, and filters for high-quality tumor and immune cells.
-* **Inputs:** `S01_metacells.csv`, `S01_datafinal.csv`
-* **Outputs:** `maynard_annotated.h5ad` [Zenodo], `Supplementary_Data_10.csv`
-
-### `03_ML_Patient_CV.py`
-**Lineage Classifier Construction:** Isolates the epithelial tumor fraction and utilizes a Nested Patient-Level GroupKFold CV Random Forest primary-versus-metastatic classifier to prevent data leakage. 
-* **Inputs:** `GSE131907_FINAL_ANNOTATED.h5ad`, `maynard_annotated.h5ad`
-* **Outputs:** `Supplementary_Data_4.csv`, `Supplementary_Data_5.csv`, Figure 5
-
-### `04_PseudoBulk_GSEA.py`
-**Pathway Enrichment:** Uses `decoupler` to aggregate cells by patient to eliminate pseudo-replication inflation. Runs continuous Log2FC-ranked GSEA against MSigDB Hallmark signatures for both cohorts.
-* **Inputs:** `GSE131907_FINAL_ANNOTATED.h5ad`, `maynard_annotated.h5ad`
-* **Outputs:** `Supplementary_Data_1.csv`, `Supplementary_Data_2.csv`, `Supplementary_Data_9.csv`, Figure 2
-
-### `05_PAGA_Trajectory.py`
-**Evolutionary Lineage:** Generates unsupervised PAGA (Partition-based Graph Abstraction) evolutionary trajectories utilizing a Force-Directed layout to map structural continuums.
-* **Inputs:** `GSE131907_FINAL_ANNOTATED.h5ad`
-* **Outputs:** `Supplementary_Data_3.csv`, Figure 3
-
-### `06_Squidpy_Maynard_Evasion.py`
-**Cell-Cell Communication:** Utilizes a 1,000-permutation statistical framework via `squidpy` on the high-depth Smart-seq2 cohort to statistically validate CD274-PDCD1 and LGALS9-HAVCR2 (TIM-3) immune evasion interactions.
-* **Inputs:** `maynard_annotated.h5ad`
-* **Outputs:** Figure 4 
-
-### `07_Maynard_Violins.py`
-**Clinical Stage Validation:** Longitudinally tracks single-cell expression shifts of *SCGB3A2*, *MUC1*, *MUC5B*, and *EZH2* across TN, RD, and PD states.
-* **Inputs:** `maynard_annotated.h5ad`
-* **Outputs:** `Supplementary_Data_8.csv`, Figure 6
-
-### `08_Spatial_Simpson_Paradox.py`
-**Spatial Niche Mapping:** Simulates pseudo-bulk spatial masking of the inverse *EZH2-HOXC* spatial association to mathematically demonstrate Simpson's Paradox.
-* **Inputs:** None (Statistical simulation executing extracted coordinates from *in vivo* GSE267960 Visium spatial data).
-* **Outputs:** `Supplementary_Data_6.csv`, `Supplementary_Data_7.csv`, Supp Fig S3, Supp Fig S4
-
-### `09_PPI_Network_Generator.py`
-**Network Architecture:** Constructs the Protein-Protein Interaction (PPI) network for the identified ML biomarkers via the STRING API, generating a Cytoscape-ready topology.
-* **Inputs:** `Supplementary_Data_5.csv`
-* **Outputs:** Figure 8 (.graphml format for Cytoscape)
-
-### `10_TCGA_Survival_Prep.py`
-**Clinical Stratification Prep:** Parses TCGA-LUAD EGFR+ expression and clinical metadata, calculates Composite Z-Scores of the *MUC1/SCGB3A2* biomarker signature, and pre-processes quartile/median survival groups.
-* **Inputs:** `Supplementary_Data_5.csv`, `data_mrna_seq_v2_rsem.txt`, `data_clinical_patient.txt`, `egfr_status.txt`
-* **Outputs:** `Figure_7B_Survival_Data.csv`, `Figure_9_Survival_Data.csv`, `Supplementary_Data_11.csv`
-
-### `11_Plot_Survival_R.R`
-**Kaplan-Meier Survival Plotting:** R script utilizing `survminer` to calculate Cox Proportional Hazards and generate Overall Survival (OS) and Progression-Free Survival (PFS) curves with at-risk tables.
-* **Inputs:** `Figure_7B_Survival_Data.csv`, `Figure_9_Survival_Data.csv`
-* **Outputs:** Figure 7B, Figure 9
+1. **`01_preprocess_GSE131907.py`** — Quality control, normalization, PCA/UMAP/Leiden clustering, and multi-marker lineage validation (Outputs: Figure 1, Supp Figs S1–S2).
+2. **`02_preprocess_Maynard.py`** — Audits `PRJNA591860` metadata and exports the 49-biopsy clinical/cellular manifest (`Supplementary_Data_10.csv`).
+3. **`03_ML_Patient_CV.py`** — Nested Patient-Level 5-Fold `GroupKFold` Random Forest classifier (`GSE131907`, 25 biopsies) and held-out 41-biopsy external validation on `PRJNA591860` (`Supplementary_Data_4.csv`, `5.csv`, `8.csv`; Figures 5–6).
+4. **`04_PseudoBulk_GSEA.py`** — Biopsy-level pseudo-bulk DGE and continuous preranked Hallmark GSEA across both cohorts (`Supplementary_Data_1.csv`, `2.csv`, `9.csv`; Figure 2).
+5. **`05_PAGA_Trajectory.py`** — Exploratory cross-sectional DPT (anchored at the `tLung` PCA medoid) and PAGA continuum plus 3×3 parameter sensitivity (`Supplementary_Data_3.csv`, `3B`, `3C`; Figure 3).
+6. **`06_Biopsy_Ligand_Receptor.py`** — Biopsy-level predicted extracellular ligand–receptor co-expression with simultaneous multiplicity-adjusted 95% bootstrap CIs (`Supplementary_Data_4B_LR_Biopsy_Stats.csv`; Figure 4).
+7. **`07_Spatial_Simpson_Paradox.py`** — Exploratory physical slide Visium correlation (`GSM8282531`), 2D spatial block bootstrapping, and 12×12 Spatial Grid Block Aggregation (`Supplementary_Data_6.csv`, `7.csv`; Supp Figs S3–S4).
+8. **`08_PPI_Network_Generator.py`** — Medium-confidence STRING (combined score >= 0.400) predicted functional association network and `.graphml` export (Figure 8).
+9. **`09_TCGA_Survival_Prep.py`** — Neoadjuvant-naïve *EGFR*-mutant TCGA-LUAD cohort construction, `log2(RSEM + 1)` composite Z-scoring, univariable/multivariable Cox models, PH diagnostics, and DPT cross-correlation (`Supplementary_Data_11.csv`, `12.csv`; Figure 7A).
+10. **`10_Plot_Survival_R.R`** — R `survival` / `survminer` Kaplan–Meier plots and risk tables for Overall Survival (Figure 7B) and Progression-Free Survival (Figure 9).
 
 ---
 
-## Installation & Key Dependencies
-To ensure full reproducibility of the computational pipeline, the following package versions (or higher) are required. We strongly recommend running this pipeline within a dedicated virtual environment or Conda environment.
+## Installation & Dependencies
 
 ```bash
-# Create and activate environment
-conda create -n osi-resistance python=3.13
-conda activate osi-resistance
+conda create -n nsclc-plasticity python=3.11
+conda activate nsclc-plasticity
 
-# Install dependencies
-pip install scanpy>=1.9.0 pandas>=1.4.0 numpy>=1.21.0 scikit-learn>=1.0.0 decoupler-py>=1.4.0 squidpy>=1.2.0 gseapy>=1.0.0 networkx>=2.8.0 lifelines>=0.27.0 matplotlib seaborn
+pip install scanpy>=1.9.0 pandas>=1.5.0 numpy>=1.23.0 scikit-learn>=1.2.0 decoupler-py>=1.4.0 gseapy>=1.0.0 networkx>=2.8.0 lifelines>=0.27.0 statsmodels>=0.14.0 matplotlib seaborn requests
+
+For Script 10 in R >= 4.3: install.packages(c("survival", "survminer", "ggplot2", "readr"))
