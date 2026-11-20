@@ -1,66 +1,107 @@
 import os
-import sys
 import scanpy as sc
 import pandas as pd
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
-import matplotlib.lines as mlines
+from scipy.stats import spearmanr
 import warnings
 warnings.filterwarnings('ignore')
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 DATA_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '..', 'data'))
-FIG_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '..', 'figures', 'Fig 3'))
+FIG_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '..', 'figures'))
 os.makedirs(FIG_DIR, exist_ok=True)
 
 def main():
-    print("--- PIPELINE SCRIPT 05: PAGA TRAJECTORY (COMPACT HIGH-RES NETWORK) ---")
+    print("--- SCRIPT 05: EXPLORATORY CROSS-SECTIONAL CONTINUUM, PAGA & SENSITIVITY ---")
     adata = sc.read_h5ad(os.path.join(DATA_DIR, 'GSE131907_FINAL_ANNOTATED.h5ad'))
-    
-    cell_col = next((c for c in adata.obs.columns if 'cell' in c.lower()), 'cell_type')
-    origin_col = next((c for c in adata.obs.columns if 'origin' in c.lower() or 'site' in c.lower()), 'Sample_Origin')
-    
-    adata_tumor = adata[adata.obs[cell_col].astype(str).str.contains('Epithelial|Tumor|Cancer', case=False, na=False)].copy()
-    
-    origin_mapping = {'nLung': 'Normal Lung', 'tLung': 'Primary Tumor (Lung)', 'tL/B': 'Primary Tumor (Bronchus)', 'PE': 'Metastatic Fluid', 'mLN': 'Metastatic Lymph Node', 'mBrain': 'Brain Metastasis'}
-    adata_tumor = adata_tumor[adata_tumor.obs[origin_col].isin(origin_mapping.keys())].copy()
-    adata_tumor.obs['PAGA_Group'] = adata_tumor.obs[origin_col].map(origin_mapping).astype('category')
-    
-    color_dict = {'Normal Lung':'#ff9933', 'Primary Tumor (Lung)':'#ffff00', 'Primary Tumor (Bronchus)':'#ffff00', 'Metastatic Fluid':'#800080', 'Metastatic Lymph Node':'#d62728', 'Brain Metastasis':'#000080'}
-    
-    if 'X_pca' not in adata_tumor.obsm: sc.pp.pca(adata_tumor, svd_solver='arpack', random_state=42)
-    sc.pp.neighbors(adata_tumor, n_neighbors=15, n_pcs=30, random_state=42)
-    sc.tl.paga(adata_tumor, groups='PAGA_Group')
-    
-    adj = adata_tumor.uns['paga']['connectivities'].todense()
-    groups = adata_tumor.obs['PAGA_Group'].cat.categories
-    cell_counts = adata_tumor.obs['PAGA_Group'].value_counts()[groups].values
-    
-    G = nx.Graph()
-    for i in range(len(groups)): G.add_node(i)
-    for i in range(len(groups)):
-        for j in range(i + 1, len(groups)):
-            if adj[i, j] > 0.05: G.add_edge(i, j, weight=adj[i, j] * 5) 
-                
-    pos = nx.spring_layout(G, weight='weight', k=0.6, seed=42)
-    
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.axis('off') 
-    
-    for i in range(len(groups)):
-        for j in range(i + 1, len(groups)):
-            if adj[i, j] > 0.05: ax.plot([pos[i][0], pos[j][0]], [pos[i][1], pos[j][1]], color='#d3d3d3', linewidth=adj[i, j] * 8, zorder=1)
-                
-    for i, group in enumerate(groups):
-        ax.scatter(pos[i][0], pos[i][1], s=cell_counts[i] * 0.2, c=color_dict[group], edgecolors='black', linewidths=1.5, zorder=2)
-        ax.text(pos[i][0], pos[i][1] + 0.08, group.replace(' (Lung)', '').replace(' (Bronchus)', ''), ha='center', va='bottom', fontsize=11, fontweight='bold', zorder=3)
+    tum = adata[(adata.obs['cell_type'].astype(str).str.contains('Epithelial|Tumor', case=False, na=False)) &
+                (adata.obs['Sample_Origin'].isin(['tLung', 'tL/B', 'PE', 'mLN']))].copy()
+    tum.obs['Anatomical_Site'] = pd.Categorical(tum.obs['Sample_Origin'].astype(str), categories=['PE', 'mLN', 'tL/B', 'tLung'])
 
-    plt.tight_layout()
-    plt.savefig(os.path.join(FIG_DIR, 'Figure_3C_PAGA_Network.pdf'), dpi=600, transparent=True, bbox_inches='tight')
-    plt.close()
-    
-    pd.DataFrame(adj, index=groups, columns=groups).to_csv(os.path.join(DATA_DIR, 'Supplementary_Data_3.csv'))
+    if 'X_pca' not in tum.obsm:
+        sc.tl.pca(tum, svd_solver='arpack', random_state=42)
+    sc.pp.neighbors(tum, n_neighbors=15, n_pcs=30, random_state=42)
+    sc.tl.diffmap(tum, random_state=42)
+
+    tlung_idx = np.where(tum.obs['Anatomical_Site'] == 'tLung')[0]
+    tlung_pca = tum.obsm['X_pca'][tlung_idx, :30]
+    medoid = int(tlung_idx[np.argmin(np.linalg.norm(tlung_pca - tlung_pca.mean(axis=0), axis=1))])
+    tum.uns['iroot'] = medoid
+    sc.tl.dpt(tum)
+    sc.tl.paga(tum, groups='Anatomical_Site')
+
+    cats = list(tum.obs['Anatomical_Site'].cat.categories)
+    conn_df = pd.DataFrame(tum.uns['paga']['connectivities'].todense(), index=cats, columns=cats)
+    conn_df.to_csv(os.path.join(DATA_DIR, 'Supplementary_Data_3.csv'))
+
+    counts_df = tum.obs.groupby('Anatomical_Site', observed=True).agg(
+        N_Cells=('Sample', 'count'), N_Unique_Biopsies=('Sample', 'nunique')
+    ).reset_index()
+    counts_df.to_csv(os.path.join(DATA_DIR, 'Supplementary_Data_3C_Node_Sample_Counts.csv'), index=False)
+
+    base_dpt = tum.obs['dpt_pseudotime'].values.copy()
+    sens = []
+    for k_nn in [10, 15, 30]:
+        for n_pc in [20, 30, 40]:
+            tmp = tum.copy()
+            sc.pp.neighbors(tmp, n_neighbors=k_nn, n_pcs=n_pc, random_state=42)
+            sc.tl.diffmap(tmp, random_state=42)
+            tmp.uns['iroot'] = medoid
+            sc.tl.dpt(tmp)
+            sc.tl.paga(tmp, groups='Anatomical_Site')
+            cm = pd.DataFrame(tmp.uns['paga']['connectivities'].todense(), index=cats, columns=cats)
+            r_s, _ = spearmanr(base_dpt[np.isfinite(base_dpt)], tmp.obs['dpt_pseudotime'].values[np.isfinite(base_dpt)])
+            sens.append({
+                'n_neighbors': k_nn, 'n_pcs': n_pc,
+                'DPT_Spearman_vs_Baseline': round(r_s, 4),
+                'PAGA_tLB_to_PE': round(float(cm.loc['tL/B', 'PE']), 4),
+                'PAGA_tLung_to_mLN': round(float(cm.loc['tLung', 'mLN']), 4)
+            })
+    pd.DataFrame(sens).to_csv(os.path.join(DATA_DIR, 'Supplementary_Data_3B_Sensitivity.csv'), index=False)
+
+    # Export Cytoscape GraphML for Panel 3C & Plot 3-Panel Figure 3
+    site_colors = {'PE': '#1f77b4', 'mLN': '#ff7f0e', 'tL/B': '#2ca02c', 'tLung': '#d62728'}
+    G_paga = nx.Graph()
+    c_idx = counts_df.set_index('Anatomical_Site')
+    for s in cats:
+        G_paga.add_node(s, display_label=s, n_cells=int(c_idx.loc[s, 'N_Cells']),
+                        n_biopsies=int(c_idx.loc[s, 'N_Unique_Biopsies']), hex_color=site_colors[s])
+    for i in range(len(cats)):
+        for j in range(i + 1, len(cats)):
+            w = float(conn_df.iloc[i, j])
+            if w > 0:
+                G_paga.add_edge(cats[i], cats[j], weight=round(w, 6), connectivity_label=f"{w:.3f}")
+    nx.write_graphml(G_paga, os.path.join(FIG_DIR, 'Figure_3C_PAGA_Connectivity.graphml'), named_key_ids=True)
+
+    fig3, axes3 = plt.subplots(1, 3, figsize=(16.0, 4.9))
+    sc.pl.umap(tum, color='Anatomical_Site', palette=[site_colors[k] for k in cats],
+               ax=axes3[0], show=False, title='A. Epithelial Anatomical Origin', frameon=True)
+    sc.pl.umap(tum, color='dpt_pseudotime', cmap='viridis',
+               ax=axes3[1], show=False, title='B. Cross-Sectional DPT Continuum', frameon=True)
+
+    ax_p = axes3[2]
+    pos_p = {'tLung': (-0.75, -0.65), 'tL/B': (0.75, -0.65), 'mLN': (-0.55, 0.72), 'PE': (0.65, 0.62)}
+    for u, v, d in G_paga.edges(data=True):
+        w = d['weight']
+        if w > 0.01:
+            ax_p.plot([pos_p[u][0], pos_p[v][0]], [pos_p[u][1], pos_p[v][1]],
+                      color='#333333', lw=max(1.0, w * 14.0), alpha=0.8, zorder=1)
+            ax_p.text((pos_p[u][0] + pos_p[v][0]) / 2, (pos_p[u][1] + pos_p[v][1]) / 2, f"{w:.2f}",
+                      fontsize=9, fontweight='bold', ha='center', va='center',
+                      bbox=dict(boxstyle='round,pad=0.18', facecolor='white', edgecolor='gray', alpha=0.9), zorder=3)
+    for n_k, (px, py) in pos_p.items():
+        ax_p.scatter(px, py, s=1050, color=site_colors[n_k], edgecolors='black', linewidths=1.5, zorder=4)
+        ax_p.text(px, py, n_k, fontsize=10.5, fontweight='bold', color='white', ha='center', va='center', zorder=5)
+    ax_p.set_xlim(-1.15, 1.15)
+    ax_p.set_ylim(-1.05, 1.05)
+    ax_p.set_xticks([])
+    ax_p.set_yticks([])
+    ax_p.set_title('C. Unsupervised PAGA Connectivity', fontweight='bold', fontsize=12)
+    fig3.tight_layout()
+    fig3.savefig(os.path.join(FIG_DIR, 'Figure_3_Transcriptomic_Continuum.pdf'), dpi=600, bbox_inches='tight')
+    plt.close(fig3)
     print("--- SCRIPT 05 COMPLETE ---")
 
 if __name__ == "__main__":
