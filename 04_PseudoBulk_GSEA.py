@@ -1,9 +1,7 @@
 import os
-import sys
 import pandas as pd
 import numpy as np
 import scanpy as sc
-import decoupler as dc
 import gseapy as gp
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -12,73 +10,92 @@ warnings.filterwarnings('ignore')
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 DATA_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '..', 'data'))
-FIG_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '..', 'figures', 'Fig 2'))
+FIG_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, '..', 'figures'))
 os.makedirs(FIG_DIR, exist_ok=True)
 
-def run_pseudobulk_gsea(adata, patient_col, group_col, ref_group, target_group, output_prefix):
-    pdata = dc.get_pseudobulk(adata, sample_col=patient_col, groups_col=group_col, mode='sum', min_cells=5, min_counts=500, skip_checks=True)
-    pdata.X = np.clip(pdata.X, a_min=0, a_max=None)
-    sc.pp.normalize_total(pdata, target_sum=1e6)
-    sc.pp.log1p(pdata)
-    
-    pdata.obs[group_col] = pdata.obs[group_col].astype('category')
-    sc.tl.rank_genes_groups(pdata, groupby=group_col, reference=ref_group, method='wilcoxon')
-    deg_df = sc.get.rank_genes_groups_df(pdata, group=target_group).dropna(subset=['logfoldchanges', 'names'])
-    
-    if output_prefix == "Discovery":
-        sig_df = deg_df[(deg_df['logfoldchanges'] > 0.25) & (deg_df['pvals_adj'] < 0.1)].sort_values('logfoldchanges', ascending=False)
-        sig_df.to_csv(os.path.join(DATA_DIR, 'Supplementary_Data_1.csv'), index=False)
-    
-    deg_df['rank_metric'] = deg_df['logfoldchanges']
-    deg_df = deg_df.sort_values('rank_metric', ascending=False)
-    rnk_path = os.path.join(DATA_DIR, f'{output_prefix}_Ranked.rnk')
-    deg_df[['names', 'rank_metric']].to_csv(rnk_path, sep='\t', index=False, header=False)
-    
-    gsea_res = gp.prerank(rnk=rnk_path, gene_sets='MSigDB_Hallmark_2020', threads=4, min_size=5, max_size=500, permutation_num=1000, seed=42)
-    out_gsea = os.path.join(DATA_DIR, 'Supplementary_Data_2.csv' if output_prefix == "Discovery" else 'Supplementary_Data_10.csv')
-    gsea_res.res2d.to_csv(out_gsea)
-    return gsea_res.res2d
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['font.size'] = 11.5
+
+def run_biopsy_gsea(adata_ep, sample_col, met_mask):
+    samples = adata_ep.obs[sample_col].unique()
+    rows, flags = [], []
+    for s in samples:
+        m = (adata_ep.obs[sample_col] == s).values
+        rows.append(np.asarray(adata_ep.X[m].mean(axis=0)).flatten())
+        flags.append(int(met_mask[m][0]))
+    pb = pd.DataFrame(rows, columns=adata_ep.var_names)
+    flags = np.array(flags)
+
+    pb_adata = sc.AnnData(X=pb.values, var=pd.DataFrame(index=pb.columns),
+                          obs=pd.DataFrame({'Group': np.where(flags == 1, 'Metastatic', 'Primary')}))
+    sc.tl.rank_genes_groups(pb_adata, groupby='Group', reference='Primary', method='wilcoxon')
+    dge = sc.get.rank_genes_groups_df(pb_adata, group='Metastatic')
+
+    lfc = (pb[flags == 1].mean(axis=0) - pb[flags == 0].mean(axis=0)).dropna()
+    lfc = lfc[lfc != 0].sort_values(ascending=False)
+    res = gp.prerank(rnk=pd.DataFrame({'g': lfc.index, 'v': lfc.values}),
+                     gene_sets='MSigDB_Hallmark_2020', threads=4, min_size=5, max_size=500,
+                     permutation_num=1000, seed=42).res2d.copy()
+    res['Clean_Term'] = (res['Term'].astype(str)
+                         .str.replace('Hallmark ', '', regex=False)
+                         .str.replace('_', ' ', regex=False)
+                         .str.replace('  ', ' ', regex=False)
+                         .str.replace('heme Metabolism', 'Heme Metabolism', regex=False))
+    for c in ['NES', 'NOM p-val', 'FDR q-val']:
+        res[c] = pd.to_numeric(res[c], errors='coerce')
+    return dge, res
 
 def main():
-    print("--- PIPELINE SCRIPT 04: PSEUDO-BULK & GSEA (FIGURE 2) ---")
-    adata_disc = sc.read_h5ad(os.path.join(DATA_DIR, 'GSE131907_FINAL_ANNOTATED.h5ad'))
-    if adata_disc.raw is not None: adata_disc = adata_disc.raw.to_adata()
-    
-    cell_type_col = next((c for c in adata_disc.obs.columns if 'cell' in c.lower()), 'cell_type')
-    origin_col = next((c for c in adata_disc.obs.columns if 'origin' in c.lower() or 'site' in c.lower()), 'Sample_Origin')
-    sample_col = next((c for c in adata_disc.obs.columns if 'patient' in c.lower() or 'sample' in c.lower()), 'Sample')
-    
-    adata_disc_tumor = adata_disc[adata_disc.obs[cell_type_col].astype(str).str.contains('Epithelial|Tumor', case=False, na=False)].copy()
-    adata_disc_tumor.obs['Status'] = adata_disc_tumor.obs[origin_col].map({'tLung': 'Primary', 'tL/B': 'Primary', 'PE': 'Metastatic', 'mLN': 'Metastatic'})
-    adata_disc_tumor = adata_disc_tumor[adata_disc_tumor.obs['Status'].notna()].copy()
-    
-    disc_summary = run_pseudobulk_gsea(adata_disc_tumor, sample_col, 'Status', 'Primary', 'Metastatic', 'Discovery')
-    
-    adata_val = sc.read_h5ad(os.path.join(DATA_DIR, 'maynard_annotated.h5ad'))
-    if adata_val.raw is not None: adata_val = adata_val.raw.to_adata()
-    
-    val_sub = adata_val[adata_val.obs['Clinical_Stage'].isin(['TN', 'PD'])].copy()
-    patient_col_val = next((col for col in ['patient_id', 'sample_id', 'Patient'] if col in val_sub.obs.columns), val_sub.obs.columns[0])
-    
-    val_summary = run_pseudobulk_gsea(val_sub, patient_col_val, 'Clinical_Stage', 'TN', 'PD', 'Maynard')
-    
-    disc_summary['Term'] = disc_summary['Term'].str.replace('Hallmark ', '', regex=False).str.replace('_', ' ', regex=False).replace('heme Metabolism', 'Heme Metabolism')
-    val_summary['Term'] = val_summary['Term'].str.replace('Hallmark ', '', regex=False).str.replace('_', ' ', regex=False).replace('heme Metabolism', 'Heme Metabolism')
-    
-    target_pathways = ['Oxidative Phosphorylation', 'Glycolysis', 'Myc Targets V1', 'Interferon Alpha Response', 'E2F Targets', 'Epithelial Mesenchymal Transition', 'Angiogenesis', 'Pancreas Beta Cells', 'KRAS Signaling Dn', 'Heme Metabolism']
-    df_disc_sub = disc_summary[disc_summary['Term'].isin(target_pathways)][['Term', 'NES']].assign(Cohort='Discovery (GSE131907)')
-    df_val_sub = val_summary[val_summary['Term'].isin(target_pathways)][['Term', 'NES']].assign(Cohort='Validation (Maynard PD vs TN)')
-    
-    plot_df = pd.concat([df_disc_sub, df_val_sub], ignore_index=True)
-    plot_df['Term'] = pd.Categorical(plot_df['Term'], categories=target_pathways, ordered=True)
-    
-    plt.figure(figsize=(11, 7))
-    sns.barplot(data=plot_df.sort_values('Term'), x='NES', y='Term', hue='Cohort', palette={'Discovery (GSE131907)': '#4682B4', 'Validation (Maynard PD vs TN)': '#DC143C'}, edgecolor='black')
-    plt.axvline(x=0, color='black', linewidth=1.5); plt.ylabel('')
-    plt.title('Figure 2: Cross-Cohort Validation of Hallmark Resistance Pathways', fontweight='bold', pad=15)
-    plt.tight_layout()
-    plt.savefig(os.path.join(FIG_DIR, 'Figure_2_Pathways_Cross_Validated.pdf'), format='pdf', dpi=600, bbox_inches='tight')
-    plt.close()
+    print("--- SCRIPT 04: BIOPSY-LEVEL PSEUDO-BULK DGE & CROSS-COHORT GSEA ---")
+    adata_d = sc.read_h5ad(os.path.join(DATA_DIR, 'GSE131907_FINAL_ANNOTATED.h5ad'))
+    raw_d = adata_d.raw.to_adata()
+    raw_d.obs = adata_d.obs.copy()
+    tum_d = raw_d[(raw_d.obs['cell_type'].astype(str).str.contains('Epithelial|Tumor', case=False, na=False)) &
+                  (raw_d.obs['Sample_Origin'].isin(['tLung', 'tL/B', 'PE', 'mLN']))].copy()
+    dge_d, disc_df = run_biopsy_gsea(tum_d, 'Sample', tum_d.obs['Sample_Origin'].isin(['PE', 'mLN']).values)
+    dge_d.to_csv(os.path.join(DATA_DIR, 'Supplementary_Data_1.csv'), index=False)
+    disc_df.to_csv(os.path.join(DATA_DIR, 'Supplementary_Data_2.csv'), index=False)
+
+    adata_m = sc.read_h5ad(os.path.join(DATA_DIR, 'maynard_annotated.h5ad'))
+    obs_m = adata_m.obs.copy()
+    if adata_m.raw is not None:
+        adata_m = adata_m.raw.to_adata()
+        adata_m.obs = obs_m
+    sc.pp.normalize_total(adata_m, target_sum=1e4)
+    sc.pp.log1p(adata_m)
+    epi_m = adata_m[(adata_m.obs['general_annotation'].astype(str).str.lower().str.contains('epi')) &
+                    (adata_m.obs['primary_or_metastaic'].isin(['Primary', 'Metastatic']))].copy()
+    _, val_df = run_biopsy_gsea(epi_m, 'sample_name', (epi_m.obs['primary_or_metastaic'] == 'Metastatic').values)
+    val_df.to_csv(os.path.join(DATA_DIR, 'Supplementary_Data_9.csv'), index=False)
+
+    merged = pd.merge(disc_df[['Clean_Term', 'NES', 'NOM p-val', 'FDR q-val']],
+                      val_df[['Clean_Term', 'NES', 'NOM p-val', 'FDR q-val']],
+                      on='Clean_Term', suffixes=('_Disc', '_Val'))
+    top_plot = merged.sort_values('FDR q-val_Disc').head(10).sort_values('NES_Disc', ascending=True)
+
+    y_pos, h = np.arange(len(top_plot)), 0.36
+    fig2, ax2 = plt.subplots(figsize=(11.2, 6.3))
+    ax2.barh(y_pos + h/2, top_plot['NES_Disc'], height=h, color='#3B75AF', edgecolor='black', label='Discovery Cohort (GSE131907: Met vs. Prim)')
+    ax2.barh(y_pos - h/2, top_plot['NES_Val'], height=h, color='#D63B44', edgecolor='black', label='External Cohort (PRJNA591860: Met vs. Prim)')
+    for idx, (_, r) in enumerate(top_plot.iterrows()):
+        if r['FDR q-val_Disc'] < 0.05:
+            ax2.text(r['NES_Disc'] + (0.05 if r['NES_Disc'] >= 0 else -0.05), idx + h/2, '*',
+                     va='center', ha='left' if r['NES_Disc'] >= 0 else 'right', fontweight='bold', fontsize=13)
+        if r['FDR q-val_Val'] < 0.05:
+            ax2.text(r['NES_Val'] + (0.05 if r['NES_Val'] >= 0 else -0.05), idx - h/2, '*',
+                     va='center', ha='left' if r['NES_Val'] >= 0 else 'right', fontweight='bold', fontsize=13)
+
+    ax2.set_yticks(y_pos)
+    ax2.set_yticklabels(top_plot['Clean_Term'], fontsize=11)
+    ax2.axvline(0, color='black', lw=1.2)
+    ax2.set_xlim(-2.3, 2.5)
+    ax2.set_xlabel('Normalized Enrichment Score (NES) [Metastatic vs. Primary Biopsies]', fontsize=12, fontweight='bold')
+    ax2.set_title('Cross-Cohort Hallmark Pathway Enrichment in Metastatic vs. Primary LUAD\n(* denotes Benjamini-Hochberg FDR q < 0.05)', fontsize=12.5, fontweight='bold', pad=12)
+    ax2.legend(loc='lower right', bbox_to_anchor=(1.0, 0.02), frameon=True, framealpha=0.95, fontsize=10)
+    sns.despine(ax=ax2)
+    fig2.tight_layout()
+    fig2.savefig(os.path.join(FIG_DIR, 'Figure_2_CrossCohort_GSEA.pdf'), dpi=600, bbox_inches='tight')
+    plt.close(fig2)
     print("--- SCRIPT 04 COMPLETE ---")
 
 if __name__ == "__main__":
